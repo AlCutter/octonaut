@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -17,6 +18,13 @@ func consumptionPath(mpan string, serial string, from, to time.Time, N int) stri
 }
 func tariffRatePath(product string, fuel string, tariff string, rate string, from, to time.Time, N int) string {
 	return fmt.Sprintf("v1/products/%s/%s-tariffs/%s/%s/?page_size=%d&period_from=%s&period_to=%s", product, fuel, tariff, rate, N, from.UTC().Format(time.RFC3339), to.UTC().Format(time.RFC3339))
+}
+func productsPath(availableAt *time.Time) string {
+	r := "v1/products/"
+	if availableAt != nil {
+		r = fmt.Sprintf("%s?available_at=%s", r, availableAt.UTC().Format(time.RFC3339))
+	}
+	return r
 }
 
 type Account struct {
@@ -117,6 +125,35 @@ type TariffRate struct {
 	} `json:"results"`
 }
 
+type Products struct {
+	Count    int       `json:"count"`
+	Next     string    `json:"next"`
+	Previous string    `json:"previous"`
+	Results  []Product `json:"results"`
+}
+
+type Product struct {
+	Code          string      `json:"code"`
+	FullName      string      `json:"full_name"`
+	DisplayName   string      `json:"display_name"`
+	Description   string      `json:"description"`
+	IsVariable    bool        `json:"is_variable"`
+	IsGreen       bool        `json:"is_green"`
+	IsTracker     bool        `json:"is_tracker"`
+	IsPrepay      bool        `json:"is_prepay"`
+	IsBusiness    bool        `json:"is_business"`
+	IsRestricted  bool        `json:"is_restricted"`
+	Term          int         `json:"term"`
+	Brand         string      `json:"brand"`
+	AvailableFrom time.Time   `json:"available_from"`
+	AvailableTo   interface{} `json:"available_to"`
+	Links         []struct {
+		Href   string `json:"href"`
+		Method string `json:"method"`
+		Rel    string `json:"rel"`
+	} `json:"links"`
+}
+
 type Client struct {
 	EndPoint  string
 	AccountID string
@@ -135,7 +172,7 @@ func (c *Client) Consumption(ctx context.Context, mpan string, serial string, fr
 	req := consumptionPath(mpan, serial, from, to, N)
 	for req != "" {
 		page := Consumption{}
-		if err := c.get(ctx, req, &r); err != nil {
+		if err := c.get(ctx, req, &page); err != nil {
 			return Consumption{}, err
 		}
 		r.Count = page.Count
@@ -153,7 +190,7 @@ func (c *Client) TariffRates(ctx context.Context, prod, fuel, tariff, rate strin
 	req := tariffRatePath(prod, fuel, tariff, rate, from, to, N)
 	for req != "" {
 		page := TariffRate{}
-		if err := c.get(ctx, req, &r); err != nil {
+		if err := c.get(ctx, req, &page); err != nil {
 			return TariffRate{}, err
 		}
 		r.Count = page.Count
@@ -162,6 +199,30 @@ func (c *Client) TariffRates(ctx context.Context, prod, fuel, tariff, rate strin
 	}
 
 	return r, nil
+}
+
+func (c *Client) Products(ctx context.Context, availableAt *time.Time) (Products, error) {
+	r := Products{}
+	req := productsPath(availableAt)
+	for req != "" {
+		page := Products{}
+		if err := c.get(ctx, req, &page); err != nil {
+			return Products{}, err
+		}
+		r.Count = page.Count
+		r.Results = append(r.Results, page.Results...)
+		req = page.Next
+	}
+	return r, nil
+}
+
+func (p Products) FindByTariff(t string) *Product {
+	for _, r := range p.Results {
+		if strings.Contains(t, r.Code) {
+			return &r
+		}
+	}
+	return nil
 }
 
 func (c *Client) get(ctx context.Context, p string, out any) error {

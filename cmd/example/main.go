@@ -58,6 +58,15 @@ search:
 
 	log.Printf("Agreement: %+v", agreement)
 
+	products, err := c.Products(ctx, &agreement.ValidFrom)
+	if err != nil {
+		log.Fatalf("Products: %v", err)
+	}
+	tariffProduct := products.FindByTariff(agreement.TariffCode)
+	if tariffProduct == nil {
+		log.Fatalf("Couldn't find product for code %q", agreement.TariffCode)
+	}
+	log.Printf("Tariff Product: %+v", tariffProduct)
 	/*
 		cons, err := c.Consumption(ctx, elecMeter.MPAN, elecMeter.Meters[0].SerialNumber, now.Add(-30*24*time.Hour), now)
 		if err != nil {
@@ -66,11 +75,9 @@ search:
 		log.Printf("Cons: %+v", cons)
 	*/
 
-	/*
-		tariff, err := c.TariffRates(ctx, prod, "electricity", tariff, rate, now.Add(-30*24*time.Hour), now)
-		if err != nil {
-			log.Fatalf("Tariff: %v", err)
-		}
-		log.Printf("Tariff: %+v", tariff)
-	*/
+	tariff, err := c.TariffRates(ctx, tariffProduct.Code, "electricity", agreement.TariffCode, "standard-unit-rates", now.Add(-30*24*time.Hour), now)
+	if err != nil {
+		log.Fatalf("Tariff: %v", err)
+	}
+	log.Printf("Tariff: %+v", tariff)
 }
