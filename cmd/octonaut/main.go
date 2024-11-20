@@ -75,10 +75,10 @@ search:
 	if err != nil {
 		klog.Exitf("Tariff: %v", err)
 	}
-	klog.Infof("Tariff: %+v", tariff)
+	//	klog.Infof("Tariff: %+v", tariff)
 }
 
-func mustNewFromFlags() *Octonaut {
+func mustNewFromFlags() *octonaut.Octonaut {
 	db, err := sql.Open("sqlite3", *dbPath)
 	if err != nil {
 		klog.Exitf("Failed to open DB (%q): %v", *dbPath, err)
@@ -90,14 +90,7 @@ func mustNewFromFlags() *Octonaut {
 		u += "/"
 	}
 
-	r := &Octonaut{
-		c: &octopus.Client{
-			EndPoint:  u,
-			AccountID: *account,
-			Key:       *key,
-		},
-		db: db,
-	}
+	r := octonaut.New(*account, *key, u, db)
 
 	return r
 }

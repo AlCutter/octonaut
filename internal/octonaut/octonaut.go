@@ -2,7 +2,7 @@ package octonaut
 
 import (
 	"context"
-	"net/http"
+	"database/sql"
 	"strings"
 	"time"
 
@@ -10,21 +10,22 @@ import (
 )
 
 type Octonaut struct {
-	c *octopus.Client
+	c  *octopus.Client
+	db *sql.DB
 }
 
-func New(a, k, ep string, hc *http.Client) *Octonaut {
+func New(a, k, ep string, db *sql.DB) *Octonaut {
 	if !strings.HasSuffix(ep, "/") {
 		ep += "/"
 	}
 
 	r := &Octonaut{
 		c: &octopus.Client{
-			EndPoint:   ep,
-			AccountID:  a,
-			Key:        k,
-			HTTPClient: hc,
+			EndPoint:  ep,
+			AccountID: a,
+			Key:       k,
 		},
+		db: db,
 	}
 
 	return r
