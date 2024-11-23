@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"k8s.io/klog/v2"
 )
 
 func accountPath(a string) string { return fmt.Sprintf("v1/accounts/%s/", a) }
@@ -177,7 +179,7 @@ func (c *Client) Consumption(ctx context.Context, mpan string, serial string, fr
 		}
 		r.Count = page.Count
 		r.Results = append(r.Results, page.Results...)
-		req = page.Next
+		req = strings.TrimPrefix(page.Next, c.EndPoint)
 	}
 
 	return r, nil
@@ -195,7 +197,7 @@ func (c *Client) TariffRates(ctx context.Context, prod, fuel, tariff, rate strin
 		}
 		r.Count = page.Count
 		r.Results = append(r.Results, page.Results...)
-		req = page.Next
+		req = strings.TrimPrefix(page.Next, c.EndPoint)
 	}
 
 	return r, nil
@@ -211,7 +213,7 @@ func (c *Client) Products(ctx context.Context, availableAt *time.Time) (Products
 		}
 		r.Count = page.Count
 		r.Results = append(r.Results, page.Results...)
-		req = page.Next
+		req = strings.TrimPrefix(page.Next, c.EndPoint)
 	}
 	return r, nil
 }
@@ -226,6 +228,7 @@ func (p Products) FindByTariff(t string) *Product {
 }
 
 func (c *Client) get(ctx context.Context, p string, out any) error {
+	klog.V(2).Infof("GET %v", p)
 	req, err := http.NewRequestWithContext(ctx, "GET", c.EndPoint+p, nil)
 	if err != nil {
 		return fmt.Errorf("NewRequestWithContext: %v", err)

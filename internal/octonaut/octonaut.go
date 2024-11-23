@@ -9,11 +9,13 @@ import (
 	"time"
 
 	"github.com/AlCutter/octonaut/internal/octopus"
+	"k8s.io/klog/v2"
 )
 
 type Octonaut struct {
-	c  *octopus.Client
-	db *sql.DB
+	c       *octopus.Client
+	db      *sql.DB
+	account octopus.Account
 }
 
 func New(ctx context.Context, a, k, ep string, db *sql.DB) (*Octonaut, error) {
@@ -30,23 +32,33 @@ func New(ctx context.Context, a, k, ep string, db *sql.DB) (*Octonaut, error) {
 		db: db,
 	}
 
-	return r, initDB(ctx, r.db)
+	if err := initDB(ctx, r.db); err != nil {
+		return nil, fmt.Errorf("initDB: %v", err)
+	}
+
+	ac, err := r.c.Account(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch account: %v", err)
+	}
+	r.account = ac
+
+	return r, nil
 }
 
 func initDB(ctx context.Context, db *sql.DB) error {
 	if _, err := db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS Account(
-			Number string NOT NULL PRIMARY KEY
+			Number	string NOT NULL PRIMARY KEY
 		);
 		`); err != nil {
 		return fmt.Errorf("failed to create Account table: %v", err)
 	}
 	if _, err := db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS Property(
-			ID string NOT NULL,
-			Account string NOT NULL,
-			MovedInAt DATETIME NOT NULL,
-			MovedOutAt DATETIME,
+			ID			string NOT NULL,
+			Account		string NOT NULL,
+			MovedInAt	DATETIME NOT NULL,
+			MovedOutAt	DATETIME,
 			PRIMARY KEY (ID),
 			FOREIGN KEY (Account) REFERENCES Account(Number)
 		);
@@ -55,9 +67,9 @@ func initDB(ctx context.Context, db *sql.DB) error {
 	}
 	if _, err := db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS Meter(
-			Property string NOT NULL,
-			MPAN string NOT NULL,
-			Serial string NOT NULL,
+			Property	string NOT NULL,
+			MPAN		string NOT NULL,
+			Serial		string NOT NULL,
 			PRIMARY KEY (Property, MPAN, Serial),
 			FOREIGN KEY (Property) REFERENCES Property(ID)
 		);
@@ -66,8 +78,8 @@ func initDB(ctx context.Context, db *sql.DB) error {
 	}
 	if _, err := db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS MeterRate(
-			Meter string NOT NULL,
-			Rate string NOT NULL,
+			Meter		string NOT NULL,
+			Rate		string NOT NULL,
 			PRIMARY KEY (Meter, Rate),
 			FOREIGN KEY (Meter) REFERENCES Meter(ID)
 		);
@@ -77,13 +89,13 @@ func initDB(ctx context.Context, db *sql.DB) error {
 
 	if _, err := db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS Consumption(
-			Account string,
-			MPAN	string,
-			Meter	string,
-			At		DateTime,
-			Seconds	LONG INT,
-			kWh		REAL,
-			PRIMARY KEY (Account, MPAN, Meter, At));
+			Account			string NOT NULL,
+			MPAN			string NOT NULL,
+			Meter			string NOT NULL,
+			IntervalStart	DateTime NOT NULL,
+			IntervalEnd		DateTime,
+			kWh				REAL NOT NULL,
+			PRIMARY KEY (Account, MPAN, Meter, IntervalStart));
 		`); err != nil {
 		return fmt.Errorf("create Consumption table failed: %v", err)
 	}
@@ -100,12 +112,37 @@ func initDB(ctx context.Context, db *sql.DB) error {
 }
 
 func (o Octonaut) Sync(ctx context.Context) error {
+	klog.V(1).Infof("Syncing %s", o.account.Number)
 	a, err := o.Account(ctx)
 	if err != nil {
 		return err
 	}
 	if err := o.upsertAccount(ctx, a); err != nil {
 		return err
+	}
+	o.account = a
+
+	for _, p := range a.Properties {
+		klog.V(1).Infof("  Syncing propery %d", p.ID)
+		for _, em := range p.ElectricityMeterPoints {
+			klog.V(1).Infof("    Syncing MPAN %s", em.MPAN)
+			for _, m := range em.Meters {
+				if m.SerialNumber != "" {
+					klog.V(1).Infof("      Syncing Meter %s", m.SerialNumber)
+					lastReading, err := o.consumptionMostRecent(ctx, em.MPAN, m.SerialNumber)
+					if err != nil {
+						klog.Warningf("Error reading local consumption date: %v", err)
+						lastReading = p.MovedInAt
+					}
+					klog.V(1).Infof("        Syncing Consumption since %v", lastReading)
+					c, err := o.c.Consumption(ctx, em.MPAN, m.SerialNumber, lastReading, time.Now())
+					klog.V(1).Infof("        Got %d records", len(c.Results))
+					if err := o.insertConsumption(ctx, em.MPAN, m.SerialNumber, c); err != nil {
+						klog.Warningf("Failed to store consumption data: %v", err)
+					}
+				}
+			}
+		}
 	}
 
 	return nil
@@ -138,24 +175,56 @@ func (o *Octonaut) upsertAccount(ctx context.Context, a octopus.Account) error {
 			}
 		}
 	}
+	return tx.Commit()
+}
+
+func (o *Octonaut) insertConsumption(ctx context.Context, mpan, serial string, c octopus.Consumption) error {
+	tx, err := o.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if tx != nil {
+			tx.Rollback()
+		}
+	}()
+
+	for _, cr := range c.Results {
+		if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO Consumption VALUES(?, ?, ?, ?, ?, ?)`, o.account.Number, mpan, serial, cr.IntervalStart, cr.IntervalEnd, cr.Consumption); err != nil {
+			return fmt.Errorf("insert/update account: %v", err)
+		}
+	}
 
 	return tx.Commit()
 }
 
-func (o *Octonaut) nextTariffRate(ctx context.Context, code string) (*time.Time, error) {
-	r := o.db.QueryRowContext(ctx, "SELECT MAX(At) FROM TariffRate WHERE Code == ?", code)
-	var at time.Time
-	if err := r.Scan(&at); err != nil {
+func (o *Octonaut) consumptionMostRecent(ctx context.Context, mpan, serial string) (time.Time, error) {
+	r := o.db.QueryRowContext(ctx, "SELECT MAX(IntervalStart) FROM Consumption WHERE Account = ? AND MPAN = ? AND Meter = ? ", o.account.Number, mpan, serial)
+	var atStr string
+	if err := r.Scan(&atStr); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return &time.Time{}, nil
+			return time.Time{}, nil
 		}
-		return nil, fmt.Errorf("failed to scan latest tariffrate.at: %v", err)
+		return time.Time{}, fmt.Errorf("failed to scan latest Consumption.at: %v", err)
 	}
-	return &at, nil
+	return time.Parse(time.RFC3339, atStr)
+
+}
+
+func (o *Octonaut) nextTariffRate(ctx context.Context, code string) (time.Time, error) {
+	r := o.db.QueryRowContext(ctx, "SELECT MAX(At) FROM TariffRate WHERE Code = ?", code)
+	var atStr string
+	if err := r.Scan(&atStr); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return time.Time{}, nil
+		}
+		return time.Time{}, fmt.Errorf("failed to scan latest TariffRate.at: %v", err)
+	}
+	return time.Parse(time.RFC3339, atStr)
 }
 
 func (o *Octonaut) Account(ctx context.Context) (octopus.Account, error) {
-	return o.c.Account(ctx)
+	return o.account, nil
 }
 
 func (o *Octonaut) Products(ctx context.Context, at *time.Time) (octopus.Products, error) {
