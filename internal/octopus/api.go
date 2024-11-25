@@ -35,20 +35,20 @@ type Account struct {
 }
 
 type Property struct {
-	ID                     int                      `json:"id"`
-	MovedInAt              time.Time                `json:"moved_in_at"`
-	MovedOutAt             *time.Time               `json:"moved_out_at"`
-	AddressLine1           string                   `json:"address_line_1"`
-	AddressLine2           string                   `json:"address_line_2"`
-	AddressLine3           string                   `json:"address_line_3"`
-	Town                   string                   `json:"town"`
-	County                 string                   `json:"county"`
-	Postcode               string                   `json:"postcode"`
-	ElectricityMeterPoints []ElectricityMeterPoints `json:"electricity_meter_points"`
-	GasMeterPoints         []GasMeterPoints         `json:"gas_meter_points"`
+	ID                     int                     `json:"id"`
+	MovedInAt              time.Time               `json:"moved_in_at"`
+	MovedOutAt             *time.Time              `json:"moved_out_at"`
+	AddressLine1           string                  `json:"address_line_1"`
+	AddressLine2           string                  `json:"address_line_2"`
+	AddressLine3           string                  `json:"address_line_3"`
+	Town                   string                  `json:"town"`
+	County                 string                  `json:"county"`
+	Postcode               string                  `json:"postcode"`
+	ElectricityMeterPoints []ElectricityMeterPoint `json:"electricity_meter_points"`
+	GasMeterPoints         []GasMeterPoints        `json:"gas_meter_points"`
 }
 
-type ElectricityMeterPoints struct {
+type ElectricityMeterPoint struct {
 	MPAN                string      `json:"mpan"`
 	ProfileClass        int         `json:"profile_class"`
 	ConsumptionStandard int         `json:"consumption_standard"`
@@ -56,7 +56,7 @@ type ElectricityMeterPoints struct {
 	Agreements          []Agreement `json:"agreements"`
 }
 
-func (em ElectricityMeterPoints) ActiveMeters() []Meter {
+func (em ElectricityMeterPoint) ActiveMeters() []Meter {
 	r := []Meter{}
 	for i := range em.Meters {
 		if em.Meters[i].SerialNumber != "" {
@@ -66,7 +66,7 @@ func (em ElectricityMeterPoints) ActiveMeters() []Meter {
 	return r
 }
 
-func (em ElectricityMeterPoints) ActiveAgreement(at time.Time) *Agreement {
+func (em ElectricityMeterPoint) ActiveAgreement(at time.Time) *Agreement {
 	for _, a := range em.Agreements {
 		if at.Before(a.ValidFrom) {
 			continue
@@ -109,22 +109,24 @@ type Consumption struct {
 	Next     string `json:"next"`
 	Previous string `json:"previous"`
 	Results  []struct {
-		Consumption   float64 `json:"consumption"`
-		IntervalStart string  `json:"interval_start"`
-		IntervalEnd   string  `json:"interval_end"`
+		Consumption   float64   `json:"consumption"`
+		IntervalStart time.Time `json:"interval_start"`
+		IntervalEnd   time.Time `json:"interval_end"`
 	} `json:"results"`
 }
 
 type TariffRate struct {
-	Count    int    `json:"count"`
-	Next     string `json:"next"`
-	Previous string `json:"previous"`
-	Results  []struct {
-		ValueExcVat float64   `json:"value_exc_vat"`
-		ValueIncVat float64   `json:"value_inc_vat"`
-		ValidFrom   time.Time `json:"valid_from"`
-		ValidTo     time.Time `json:"valid_to"`
-	} `json:"results"`
+	Count    int            `json:"count"`
+	Next     string         `json:"next"`
+	Previous string         `json:"previous"`
+	Results  []RateInterval `json:"results"`
+}
+
+type RateInterval struct {
+	ValueExcVat float64   `json:"value_exc_vat"`
+	ValueIncVat float64   `json:"value_inc_vat"`
+	ValidFrom   time.Time `json:"valid_from"`
+	ValidTo     time.Time `json:"valid_to"`
 }
 
 type Products struct {

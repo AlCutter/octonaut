@@ -3,6 +3,7 @@ package octonaut
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -13,9 +14,10 @@ import (
 )
 
 type Octonaut struct {
-	c       *octopus.Client
-	db      *sql.DB
-	account octopus.Account
+	c  *octopus.Client
+	db *sql.DB
+
+	account *octopus.Account
 }
 
 func New(ctx context.Context, a, k, ep string, db *sql.DB) (*Octonaut, error) {
@@ -36,64 +38,32 @@ func New(ctx context.Context, a, k, ep string, db *sql.DB) (*Octonaut, error) {
 		return nil, fmt.Errorf("initDB: %v", err)
 	}
 
-	ac, err := r.c.Account(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch account: %v", err)
-	}
-	r.account = ac
-
+	/*
+		account, err := r.Account(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch account: %v", err)
+		}
+		r.account = account
+	*/
 	return r, nil
 }
 
 func initDB(ctx context.Context, db *sql.DB) error {
 	if _, err := db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS Account(
-			Number	string NOT NULL PRIMARY KEY
+			Number	string NOT NULL PRIMARY KEY,
+			JSON	string
 		);
 		`); err != nil {
 		return fmt.Errorf("failed to create Account table: %v", err)
 	}
 	if _, err := db.ExecContext(ctx, `
-		CREATE TABLE IF NOT EXISTS Property(
-			ID			string NOT NULL,
-			Account		string NOT NULL,
-			MovedInAt	DATETIME NOT NULL,
-			MovedOutAt	DATETIME,
-			PRIMARY KEY (ID),
-			FOREIGN KEY (Account) REFERENCES Account(Number)
-		);
-		`); err != nil {
-		return fmt.Errorf("failed to create Property table: %v", err)
-	}
-	if _, err := db.ExecContext(ctx, `
-		CREATE TABLE IF NOT EXISTS Meter(
-			Property	string NOT NULL,
-			MPAN		string NOT NULL,
-			Serial		string NOT NULL,
-			PRIMARY KEY (Property, MPAN, Serial),
-			FOREIGN KEY (Property) REFERENCES Property(ID)
-		);
-		`); err != nil {
-		return fmt.Errorf("failed to create Meter table: %v", err)
-	}
-	if _, err := db.ExecContext(ctx, `
-		CREATE TABLE IF NOT EXISTS MeterRate(
-			Meter		string NOT NULL,
-			Rate		string NOT NULL,
-			PRIMARY KEY (Meter, Rate),
-			FOREIGN KEY (Meter) REFERENCES Meter(ID)
-		);
-		`); err != nil {
-		return fmt.Errorf("failed to create MeterRate table: %v", err)
-	}
-
-	if _, err := db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS Consumption(
 			Account			string NOT NULL,
 			MPAN			string NOT NULL,
 			Meter			string NOT NULL,
-			IntervalStart	DateTime NOT NULL,
-			IntervalEnd		DateTime,
+			IntervalStart	Timestamp NOT NULL,
+			IntervalEnd		Timestamp,
 			kWh				REAL NOT NULL,
 			PRIMARY KEY (Account, MPAN, Meter, IntervalStart));
 		`); err != nil {
@@ -101,10 +71,11 @@ func initDB(ctx context.Context, db *sql.DB) error {
 	}
 	if _, err := db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS TariffRate(
-			Code	string,
-			At		DateTime,
-			PerUnit REAL,
-			PRIMARY KEY (Code, At));
+			Code			string NOT NULL,
+			ValidFrom		Timestamp NOT NULL,
+			ValidTo			Timestamp,
+			UnitCostIncVAT	REAL NOT NULL,
+			PRIMARY KEY (Code, ValidFrom ASC));
 		`); err != nil {
 		return fmt.Errorf("create TariffRate table failed: %v", err)
 	}
@@ -112,15 +83,15 @@ func initDB(ctx context.Context, db *sql.DB) error {
 }
 
 func (o Octonaut) Sync(ctx context.Context) error {
-	klog.V(1).Infof("Syncing %s", o.account.Number)
-	a, err := o.Account(ctx)
+	klog.V(1).Infof("Syncing %s", o.c.AccountID)
+	a, err := o.c.Account(ctx)
 	if err != nil {
 		return err
 	}
 	if err := o.upsertAccount(ctx, a); err != nil {
 		return err
 	}
-	o.account = a
+	o.account = &a
 
 	for _, p := range a.Properties {
 		klog.V(1).Infof("  Syncing propery %d", p.ID)
@@ -149,33 +120,15 @@ func (o Octonaut) Sync(ctx context.Context) error {
 }
 
 func (o *Octonaut) upsertAccount(ctx context.Context, a octopus.Account) error {
-	tx, err := o.db.Begin()
+	j, err := json.Marshal(a)
 	if err != nil {
-		return err
+		return fmt.Errorf("marshal: %v", err)
 	}
-	defer func() {
-		if tx != nil {
-			tx.Rollback()
-		}
-	}()
 
-	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO Account VALUES(?)`, a.Number); err != nil {
+	if _, err := o.db.ExecContext(ctx, `INSERT OR REPLACE INTO Account VALUES(?, ?)`, a.Number, j); err != nil {
 		return fmt.Errorf("insert/update account: %v", err)
 	}
-
-	for _, p := range a.Properties {
-		if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO Property VALUES(?, ?, ?, ?)`, p.ID, a.Number, p.MovedInAt, p.MovedOutAt); err != nil {
-			return fmt.Errorf("insert/update property: %v", err)
-		}
-		for _, em := range p.ElectricityMeterPoints {
-			for _, m := range em.Meters {
-				if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO Meter VALUES(?, ?, ?)`, p.ID, em.MPAN, m.SerialNumber); err != nil {
-					return fmt.Errorf("insert/update Meter: %v", err)
-				}
-			}
-		}
-	}
-	return tx.Commit()
+	return nil
 }
 
 func (o *Octonaut) insertConsumption(ctx context.Context, mpan, serial string, c octopus.Consumption) error {
@@ -190,7 +143,12 @@ func (o *Octonaut) insertConsumption(ctx context.Context, mpan, serial string, c
 	}()
 
 	for _, cr := range c.Results {
-		if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO Consumption VALUES(?, ?, ?, ?, ?, ?)`, o.account.Number, mpan, serial, cr.IntervalStart, cr.IntervalEnd, cr.Consumption); err != nil {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT OR REPLACE INTO Consumption VALUES(?, ?, ?, ?, ?, ?)`,
+			o.account.Number,
+			mpan,
+			serial,
+			cr.IntervalStart, cr.IntervalEnd, cr.Consumption); err != nil {
 			return fmt.Errorf("insert/update account: %v", err)
 		}
 	}
@@ -200,37 +158,169 @@ func (o *Octonaut) insertConsumption(ctx context.Context, mpan, serial string, c
 
 func (o *Octonaut) consumptionMostRecent(ctx context.Context, mpan, serial string) (time.Time, error) {
 	r := o.db.QueryRowContext(ctx, "SELECT MAX(IntervalStart) FROM Consumption WHERE Account = ? AND MPAN = ? AND Meter = ? ", o.account.Number, mpan, serial)
-	var atStr string
-	if err := r.Scan(&atStr); err != nil {
+	var start sql.NullTime
+	if err := r.Scan(&start); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return time.Time{}, nil
 		}
 		return time.Time{}, fmt.Errorf("failed to scan latest Consumption.at: %v", err)
 	}
-	return time.Parse(time.RFC3339, atStr)
-
+	return start.Time, nil
 }
 
-func (o *Octonaut) nextTariffRate(ctx context.Context, code string) (time.Time, error) {
-	r := o.db.QueryRowContext(ctx, "SELECT MAX(At) FROM TariffRate WHERE Code = ?", code)
-	var atStr string
-	if err := r.Scan(&atStr); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return time.Time{}, nil
-		}
-		return time.Time{}, fmt.Errorf("failed to scan latest TariffRate.at: %v", err)
+func (o *Octonaut) SyncTariff(ctx context.Context, product, tariffCode string, from time.Time, to time.Time) error {
+	t, err := o.c.TariffRates(ctx, product, "electricity", tariffCode, "standard-unit-rates", from, to)
+	if err != nil {
+		return fmt.Errorf("TariffRates: %v", err)
 	}
-	return time.Parse(time.RFC3339, atStr)
+
+	if err := o.upsertTariff(ctx, tariffCode, t); err != nil {
+		return fmt.Errorf("Upsert: %v", err)
+	}
+
+	return nil
 }
 
-func (o *Octonaut) Account(ctx context.Context) (octopus.Account, error) {
-	return o.account, nil
+func (o *Octonaut) upsertTariff(ctx context.Context, tariffCode string, t octopus.TariffRate) error {
+	tx, err := o.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if tx != nil {
+			tx.Rollback()
+		}
+	}()
+
+	for _, r := range t.Results {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT OR REPLACE INTO TariffRate VALUES(?, ?, ?, ?)`,
+			tariffCode, r.ValidFrom, r.ValidTo, r.ValueIncVat); err != nil {
+			return fmt.Errorf("insert/update tariffrate: %v", err)
+		}
+	}
+
+	return tx.Commit()
+}
+
+func (o *Octonaut) Account(ctx context.Context) (*octopus.Account, bool, error) {
+	r := o.db.QueryRowContext(ctx, "SELECT JSON from Account WHERE Number = ?", o.c.AccountID)
+	var j []byte
+	if err := r.Scan(&j); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, true, nil
+		}
+		return nil, false, fmt.Errorf("Scan: %v", err)
+	}
+	a := &octopus.Account{}
+	if err := json.Unmarshal(j, &a); err != nil {
+		return nil, false, fmt.Errorf("Unmarshal: %v", err)
+	}
+	// Now check for invalid meters and remove them
+	for pi, p := range a.Properties {
+		fem := []octopus.ElectricityMeterPoint{}
+		for ei, em := range p.ElectricityMeterPoints {
+			if em.MPAN == "" {
+				continue
+			}
+			fms := []octopus.Meter{}
+			for _, m := range em.Meters {
+				if m.SerialNumber == "" {
+					continue
+				}
+				fms = append(fms, m)
+			}
+			if len(fms) > 0 {
+				a.Properties[pi].ElectricityMeterPoints[ei].Meters = fms
+				fem = append(fem, em)
+			}
+		}
+	}
+	return a, false, nil
 }
 
 func (o *Octonaut) Products(ctx context.Context, at *time.Time) (octopus.Products, error) {
 	return o.c.Products(ctx, at)
 }
 
-func (o *Octonaut) TariffRates(ctx context.Context, product, fuel, tarrif, rate string, from, to time.Time) (octopus.TariffRate, error) {
-	return o.c.TariffRates(ctx, product, fuel, tarrif, rate, from, to)
+func (o *Octonaut) TariffRates(ctx context.Context, tariffCode string, from, to time.Time) (*octopus.TariffRate, error) {
+	r := octopus.TariffRate{}
+	q := `
+		SELECT ValidFrom, ValidTo, UnitCostIncVAT FROM TariffRate WHERE Code = $code AND ValidFrom <= $from AND ValidTo > $from
+		UNION
+		SELECT ValidFrom, ValidTo, UnitCostIncVAT FROM TariffRate WHERE Code = $code AND ValidFrom > $from AND ValidFrom <= $to
+		ORDER BY ValidFrom ASC`
+	args := []any{
+		sql.Named("code", tariffCode),
+		sql.Named("from", from),
+		sql.Named("to", to)}
+	rows, err := o.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("QueryContext: %v", err)
+	}
+	var last *time.Time
+	for rows.Next() {
+		var start time.Time
+		var end sql.NullTime
+		var k float64
+		if err := rows.Scan(&start, &end, &k); err != nil {
+			return nil, fmt.Errorf("Scan: %v", err)
+		}
+
+		if last != nil && !last.Equal(start) {
+			return nil, fmt.Errorf("missing data between %v and %v", last, start)
+		}
+		r.Results = append(r.Results, octopus.RateInterval{
+			ValidFrom:   start,
+			ValidTo:     end.Time,
+			ValueIncVat: k,
+		})
+		from = start
+		last = &(end.Time)
+	}
+	if len(r.Results) == 0 {
+		return nil, errors.New("no data")
+	}
+	return &r, nil
+}
+
+func (o *Octonaut) Consumption(ctx context.Context, mpan, meter string, from time.Time, to time.Time) (*Consumption, error) {
+	r := Consumption{}
+	q := `
+		SELECT IntervalStart, IntervalEnd, kWh FROM Consumption WHERE Account = $account AND MPAN = $mpan AND Meter = $meter AND IntervalStart <= $from AND IntervalEnd > $from
+		UNION
+		SELECT IntervalStart, IntervalEnd, kWh FROM Consumption WHERE Account = $account AND MPAN = $mpan AND Meter = $meter AND IntervalStart > $from AND IntervalStart <= $to
+		ORDER BY IntervalStart ASC`
+	args := []any{
+		sql.Named("account", o.c.AccountID),
+		sql.Named("mpan", mpan),
+		sql.Named("meter", meter),
+		sql.Named("from", from),
+		sql.Named("to", to)}
+	rows, err := o.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("QueryContext: %v", err)
+	}
+	var last *time.Time
+	for rows.Next() {
+		var start time.Time
+		var end sql.NullTime
+		var k float64
+		if err := rows.Scan(&start, &end, &k); err != nil {
+			return nil, fmt.Errorf("Scan: %v", err)
+		}
+		if last != nil && !last.Equal(start) {
+			return nil, fmt.Errorf("missing data between %v and %v", last, start)
+		}
+		r.Intervals = append(r.Intervals, ConsumptionInterval{
+			Start:       start,
+			End:         end.Time,
+			Consumption: k,
+		})
+		last = &(end.Time)
+	}
+	if len(r.Intervals) == 0 {
+		return nil, errors.New("no data")
+	}
+	return &r, nil
 }

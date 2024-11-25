@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"flag"
 	"strings"
+	"time"
 
 	"github.com/AlCutter/octonaut/internal/octonaut"
 	_ "github.com/mattn/go-sqlite3"
@@ -31,25 +32,51 @@ func main() {
 		}
 	}()
 
-	if err := o.Sync(ctx); err != nil {
-		klog.Exitf("Sync: %v", err)
+	a, needSync, err := o.Account(ctx)
+	if err != nil {
+		klog.Exitf("Account: %v", err)
+	}
+	if needSync {
+		if err := o.Sync(ctx); err != nil {
+			klog.Exitf("Sync: %v", err)
+		}
+		a, _, err = o.Account(ctx)
+		if err != nil {
+			klog.Exitf("Account: %v", err)
+		}
 	}
 
-	/*
-		cons, err := c.Consumption(ctx, elecMeter.MPAN, elecMeter.Meters[0].SerialNumber, now.Add(-30*24*time.Hour), now)
-		if err != nil {
-			klog.Exitf("Consumption: %v", err)
-		}
-		klog.Infof("Cons: %+v", cons)
-	*/
+	ps := a.Properties[0]
+	em := ps.ElectricityMeterPoints[0]
 
-	/*
-		_, err = o.TariffRates(ctx, tariffProduct.Code, "electricity", agreement.TariffCode, "standard-unit-rates", now.Add(-30*24*time.Hour), now)
-		if err != nil {
-			klog.Exitf("Tariff: %v", err)
-		}
-	*/
-	//	klog.Infof("Tariff: %+v", tariff)
+	now := time.Now().Add(-24 * time.Hour * 3).Truncate(30 * time.Minute)
+	end := now.Add(8 * time.Hour)
+	klog.Infof("Now: %v", now)
+	klog.Infof("End: %v", end)
+	//end := now.Add(15 * time.Minute)
+	cons, err := o.Consumption(ctx, em.MPAN, em.Meters[0].SerialNumber, now, end)
+	if err != nil {
+		klog.Exitf("Consumption: %v", err)
+	}
+	klog.Infof("Cons: %+v", cons)
+
+	if err := o.SyncTariff(ctx, "AGILE-24-04-03", "E-1R-AGILE-24-04-03-J", now, end); err != nil {
+		klog.Exitf("SyncTariff: %v", err)
+	}
+
+	rates, err := o.TariffRates(ctx, em.ActiveAgreement(now).TariffCode, now, end)
+	if err != nil {
+		klog.Exitf("Tariff: %v", err)
+	}
+	klog.Infof("Tariff: %+v", rates)
+
+	//cost, err := octonaut.TotalCost(ctx, cons, octonaut.FlatRate(0.25))
+	cost, err := octonaut.TotalCost(ctx, cons, octonaut.Tariff(*rates))
+	if err != nil {
+		klog.Exitf("TotalCost: %v", err)
+	}
+	klog.Infof("TotalCost: £%.2f", cost/100.0)
+
 }
 
 func mustNewFromFlags(ctx context.Context) (func() error, *octonaut.Octonaut) {
