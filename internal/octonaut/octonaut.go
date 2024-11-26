@@ -246,7 +246,7 @@ func (o *Octonaut) Products(ctx context.Context, at *time.Time) (octopus.Product
 func (o *Octonaut) TariffRates(ctx context.Context, tariffCode string, from, to time.Time) (*octopus.TariffRate, error) {
 	r := octopus.TariffRate{}
 	q := `
-		SELECT ValidFrom, ValidTo, UnitCostIncVAT FROM TariffRate WHERE Code = $code AND ValidFrom <= $from AND ValidTo > $from
+		SELECT ValidFrom, ValidTo, UnitCostIncVAT FROM TariffRate WHERE Code = $code AND ValidFrom <= $from AND ValidTo >= $from
 		UNION
 		SELECT ValidFrom, ValidTo, UnitCostIncVAT FROM TariffRate WHERE Code = $code AND ValidFrom > $from AND ValidFrom <= $to
 		ORDER BY ValidFrom ASC`
@@ -311,12 +311,16 @@ func (o *Octonaut) Consumption(ctx context.Context, mpan, meter string, from tim
 			return nil, fmt.Errorf("Scan: %v", err)
 		}
 		if last != nil && !last.Equal(start) {
-			klog.Warningf("Missing data between %v and %v, inserting zero usage interval", last, start)
-			r.Intervals = append(r.Intervals, ConsumptionInterval{
-				Start:       *last,
-				End:         start,
-				Consumption: 0,
-			})
+			klog.Warningf("Missing data between %v and %v, inserting zero usage intervals", last, start)
+			for last.Before(start) {
+				e := last.Add(30 * time.Minute)
+				r.Intervals = append(r.Intervals, ConsumptionInterval{
+					Start:       *last,
+					End:         e,
+					Consumption: 0,
+				})
+				last = &e
+			}
 		}
 		r.Intervals = append(r.Intervals, ConsumptionInterval{
 			Start:       start,

@@ -29,23 +29,26 @@ func FlatRate(kWhCost float64) CostFn {
 func Tariff(t octopus.TariffRate) CostFn {
 	i := 0
 	return func(_ context.Context, from, to time.Time, kWh float64) (float64, error) {
+		fromU, toU := from.Unix(), to.Unix()
 		if i >= len(t.Results) {
 			return 0, fmt.Errorf("no more tariff entries")
 		}
 		for i < len(t.Results) {
+			rFromU, rToU := t.Results[i].ValidFrom.Unix(), t.Results[i].ValidTo.Unix()
 			switch {
-			case to.Before(t.Results[i].ValidFrom):
-				return 0, fmt.Errorf("interval (%v -> %v) is before current rate interval (%v -> %v)", from, to, t.Results[i].ValidFrom, t.Results[i].ValidTo)
-			case !t.Results[i].ValidFrom.After(from) && !t.Results[i].ValidTo.After(to):
-				v := t.Results[i].ValueIncVat * kWh
-				i++
-				return v, nil
-			default:
+			case toU < rFromU:
+				return 0, fmt.Errorf("interval [%d] -> [%d] is before current rate interval [%d] ->  [%d]", fromU, toU, rFromU, rToU)
+			case fromU >= rToU:
 				i++
 				continue
+			case fromU >= rFromU && toU <= rToU:
+				v := t.Results[i].ValueIncVat * kWh
+				return v, nil
+			default:
+				return 0, fmt.Errorf("What happened? from %d to %d,  rate valid from %d to %d", fromU, toU, rFromU, rToU)
 			}
 		}
-		return 0, fmt.Errorf("no more tariff entries")
+		return 0, fmt.Errorf("no more tariff entries, but need %d -> %d", fromU, toU)
 	}
 }
 

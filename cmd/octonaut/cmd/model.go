@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/AlCutter/octonaut/internal/octonaut"
+	"github.com/AlCutter/octonaut/internal/octopus"
 	"github.com/spf13/cobra"
 	"k8s.io/klog/v2"
 
@@ -42,7 +43,8 @@ func doModel(command *cobra.Command, args []string) {
 	//	now := time.Now().Add(-24 * time.Hour * 3).Truncate(30 * time.Minute)
 	//	end := now.Add(8 * time.Hour)
 	now := time.Now().Truncate(24 * time.Hour).UTC()
-	start := time.Date(now.Year(), time.October, 1, 0, 0, 0, 0, time.Local)
+	start := time.Date(now.Year(), time.March, 19, 0, 0, 0, 0, time.Local)
+	//start := time.Date(now.Year(), time.October, 1, 0, 0, 0, 0, time.Local)
 	end := time.Date(now.Year(), time.October, 31, 23, 59, 59, 0, time.Local)
 	//end := now.Add(-24 * time.Hour * 3)
 	klog.Infof("Start: %v", start)
@@ -54,23 +56,52 @@ func doModel(command *cobra.Command, args []string) {
 	}
 
 	if err := o.SyncTariff(ctx, "AGILE-24-04-03", "E-1R-AGILE-24-04-03-J", start, end); err != nil {
-		klog.Exitf("SyncTariff: %v", err)
+		klog.Exitf("SyncTariff (agile): %v", err)
+	}
+	if err := o.SyncTariff(ctx, "INTELLI-VAR-22-10-14", "E-1R-INTELLI-VAR-22-10-14-J", start, end); err != nil {
+		klog.Exitf("SyncTariff (intelli): %v", err)
 	}
 
-	rates, err := o.TariffRates(ctx, em.ActiveAgreement(now).TariffCode, start, end)
+	agileRates, err := o.TariffRates(ctx, "E-1R-AGILE-24-04-03-J", start, end)
 	if err != nil {
-		klog.Exitf("Tariff: %v", err)
+		klog.Exitf("Tariff (agile): %v", err)
+	}
+
+	intelliRates, err := o.TariffRates(ctx, "E-1R-INTELLI-VAR-22-10-14-J", start, end)
+	if err != nil {
+		klog.Exitf("Tariff (intelli): %v", err)
 	}
 
 	//cost, err := octonaut.TotalCost(ctx, cons, octonaut.FlatRate(0.25))
-	totalCost, totalCons, err := octonaut.TotalCost(ctx, cons, octonaut.Tariff(*rates))
+	shiftedCons := octonaut.Apply(octonaut.LoadShift(40, 10, 60, 0, 5), *cons)
+
+	klog.Infof("Unmodified=============")
+	totalOrig := runModel(ctx, cons, agileRates)
+
+	klog.Infof("Load shifted (agile)===========")
+	totalShiftedAgile := runModel(ctx, &shiftedCons, agileRates)
+	klog.Infof("Saving shifted Agile: £%.2f", (totalOrig-totalShiftedAgile)/100.0)
+
+	klog.Infof("Load shifted (intelli)===========")
+	totalShiftedIntelli := runModel(ctx, &shiftedCons, intelliRates)
+	klog.Infof("Saving shifted Intelligent Go: £%.2f", (totalOrig-totalShiftedIntelli)/100.0)
+
+}
+
+func runModel(ctx context.Context, cons *octonaut.Consumption, rates *octopus.TariffRate) float64 {
+	start := cons.Intervals[0].Start
+	end := cons.Intervals[len(cons.Intervals)-1].End
+	energyCost, energyCons, err := octonaut.TotalCost(ctx, cons, octonaut.Tariff(*rates))
 	if err != nil {
 		klog.Exitf("TotalCost: %v", err)
 	}
-	klog.Infof("Energy    : £%.2f (inc. VAT) (%.2f kWh)", totalCost/100.0, totalCons)
+	klog.Infof("Energy    : £%.2f (inc. VAT) (%.2f kWh)", energyCost/100.0, energyCons)
 	days := float64((end.Sub(start)) / (24 * time.Hour))
 	standing := 54.83 * days
 	klog.Infof("Standing  : £%.2f (inc. VAT) (%.1f days)", standing/100.0, days)
-	klog.Infof("Total Cost: £%.2f", (totalCost+standing)/100.0)
+	totalCost := (energyCost + standing)
+	klog.Infof("Total Cost: £%.2f", totalCost/100.0)
+
+	return totalCost
 
 }
