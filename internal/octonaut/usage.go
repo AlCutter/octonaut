@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/AlCutter/octonaut/internal/octopus"
-	"k8s.io/klog/v2"
 )
 
 type Consumption struct {
@@ -30,7 +29,6 @@ func FlatRate(kWhCost float64) CostFn {
 func Tariff(t octopus.TariffRate) CostFn {
 	i := 0
 	return func(_ context.Context, from, to time.Time, kWh float64) (float64, error) {
-		klog.Infof("T: %v -> %v", from, to)
 		if i >= len(t.Results) {
 			return 0, fmt.Errorf("no more tariff entries")
 		}
@@ -39,7 +37,9 @@ func Tariff(t octopus.TariffRate) CostFn {
 			case to.Before(t.Results[i].ValidFrom):
 				return 0, fmt.Errorf("interval (%v -> %v) is before current rate interval (%v -> %v)", from, to, t.Results[i].ValidFrom, t.Results[i].ValidTo)
 			case !t.Results[i].ValidFrom.After(from) && !t.Results[i].ValidTo.After(to):
-				return t.Results[i].ValueIncVat * kWh, nil
+				v := t.Results[i].ValueIncVat * kWh
+				i++
+				return v, nil
 			default:
 				i++
 				continue
@@ -49,14 +49,16 @@ func Tariff(t octopus.TariffRate) CostFn {
 	}
 }
 
-func TotalCost(ctx context.Context, cons *Consumption, c CostFn) (float64, error) {
-	total := float64(0)
+func TotalCost(ctx context.Context, cons *Consumption, c CostFn) (float64, float64, error) {
+	totalCost := float64(0)
+	totalConsumption := float64(0)
 	for _, u := range cons.Intervals {
 		pence, err := c(ctx, u.Start, u.End, u.Consumption)
 		if err != nil {
-			return 0, fmt.Errorf("CostFN: %v", err)
+			return 0, 0, fmt.Errorf("CostFN: %v", err)
 		}
-		total += pence
+		totalCost += pence
+		totalConsumption += u.Consumption
 	}
-	return total, nil
+	return totalCost, totalConsumption, nil
 }

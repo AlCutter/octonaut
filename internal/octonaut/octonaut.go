@@ -83,7 +83,7 @@ func initDB(ctx context.Context, db *sql.DB) error {
 }
 
 func (o Octonaut) Sync(ctx context.Context) error {
-	klog.V(1).Infof("Syncing %s", o.c.AccountID)
+	klog.Infof("Syncing %s", o.c.AccountID)
 	a, err := o.c.Account(ctx)
 	if err != nil {
 		return err
@@ -94,20 +94,20 @@ func (o Octonaut) Sync(ctx context.Context) error {
 	o.account = &a
 
 	for _, p := range a.Properties {
-		klog.V(1).Infof("  Syncing propery %d", p.ID)
+		klog.Infof(" + Syncing property %d", p.ID)
 		for _, em := range p.ElectricityMeterPoints {
-			klog.V(1).Infof("    Syncing MPAN %s", em.MPAN)
+			klog.Infof(" | + Syncing MPAN %s", em.MPAN)
 			for _, m := range em.Meters {
 				if m.SerialNumber != "" {
-					klog.V(1).Infof("      Syncing Meter %s", m.SerialNumber)
+					klog.Infof(" | | + Syncing Meter %s", m.SerialNumber)
 					lastReading, err := o.consumptionMostRecent(ctx, em.MPAN, m.SerialNumber)
 					if err != nil {
 						klog.Warningf("Error reading local consumption date: %v", err)
 						lastReading = p.MovedInAt
 					}
-					klog.V(1).Infof("        Syncing Consumption since %v", lastReading)
+					klog.Infof(" | | | + Syncing Consumption since %v", lastReading)
 					c, err := o.c.Consumption(ctx, em.MPAN, m.SerialNumber, lastReading, time.Now())
-					klog.V(1).Infof("        Got %d records", len(c.Results))
+					klog.Infof(" | | | | Got %d records", len(c.Results))
 					if err := o.insertConsumption(ctx, em.MPAN, m.SerialNumber, c); err != nil {
 						klog.Warningf("Failed to store consumption data: %v", err)
 					}
@@ -148,7 +148,7 @@ func (o *Octonaut) insertConsumption(ctx context.Context, mpan, serial string, c
 			o.account.Number,
 			mpan,
 			serial,
-			cr.IntervalStart, cr.IntervalEnd, cr.Consumption); err != nil {
+			cr.IntervalStart.Unix(), cr.IntervalEnd.Unix(), cr.Consumption); err != nil {
 			return fmt.Errorf("insert/update account: %v", err)
 		}
 	}
@@ -157,7 +157,7 @@ func (o *Octonaut) insertConsumption(ctx context.Context, mpan, serial string, c
 }
 
 func (o *Octonaut) consumptionMostRecent(ctx context.Context, mpan, serial string) (time.Time, error) {
-	r := o.db.QueryRowContext(ctx, "SELECT MAX(IntervalStart) FROM Consumption WHERE Account = ? AND MPAN = ? AND Meter = ? ", o.account.Number, mpan, serial)
+	r := o.db.QueryRowContext(ctx, "SELECT datetime(MAX(IntervalStart)) FROM Consumption WHERE Account = ? AND MPAN = ? AND Meter = ? ", o.account.Number, mpan, serial)
 	var start sql.NullTime
 	if err := r.Scan(&start); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -195,7 +195,7 @@ func (o *Octonaut) upsertTariff(ctx context.Context, tariffCode string, t octopu
 	for _, r := range t.Results {
 		if _, err := tx.ExecContext(ctx,
 			`INSERT OR REPLACE INTO TariffRate VALUES(?, ?, ?, ?)`,
-			tariffCode, r.ValidFrom, r.ValidTo, r.ValueIncVat); err != nil {
+			tariffCode, r.ValidFrom.Unix(), r.ValidTo.Unix(), r.ValueIncVat); err != nil {
 			return fmt.Errorf("insert/update tariffrate: %v", err)
 		}
 	}
@@ -252,8 +252,8 @@ func (o *Octonaut) TariffRates(ctx context.Context, tariffCode string, from, to 
 		ORDER BY ValidFrom ASC`
 	args := []any{
 		sql.Named("code", tariffCode),
-		sql.Named("from", from),
-		sql.Named("to", to)}
+		sql.Named("from", from.Unix()),
+		sql.Named("to", to.Unix())}
 	rows, err := o.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("QueryContext: %v", err)
@@ -281,6 +281,7 @@ func (o *Octonaut) TariffRates(ctx context.Context, tariffCode string, from, to 
 	if len(r.Results) == 0 {
 		return nil, errors.New("no data")
 	}
+	klog.Infof("%d TariffRates", len(r.Results))
 	return &r, nil
 }
 
@@ -295,8 +296,8 @@ func (o *Octonaut) Consumption(ctx context.Context, mpan, meter string, from tim
 		sql.Named("account", o.c.AccountID),
 		sql.Named("mpan", mpan),
 		sql.Named("meter", meter),
-		sql.Named("from", from),
-		sql.Named("to", to)}
+		sql.Named("from", from.Unix()),
+		sql.Named("to", to.Unix())}
 	rows, err := o.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("QueryContext: %v", err)
@@ -310,7 +311,12 @@ func (o *Octonaut) Consumption(ctx context.Context, mpan, meter string, from tim
 			return nil, fmt.Errorf("Scan: %v", err)
 		}
 		if last != nil && !last.Equal(start) {
-			return nil, fmt.Errorf("missing data between %v and %v", last, start)
+			klog.Warningf("Missing data between %v and %v, inserting zero usage interval", last, start)
+			r.Intervals = append(r.Intervals, ConsumptionInterval{
+				Start:       *last,
+				End:         start,
+				Consumption: 0,
+			})
 		}
 		r.Intervals = append(r.Intervals, ConsumptionInterval{
 			Start:       start,
@@ -322,5 +328,6 @@ func (o *Octonaut) Consumption(ctx context.Context, mpan, meter string, from tim
 	if len(r.Intervals) == 0 {
 		return nil, errors.New("no data")
 	}
+	klog.Infof("%d ConsumptionIntervals", len(r.Intervals))
 	return &r, nil
 }
