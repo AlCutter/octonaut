@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"context"
+	"fmt"
+	"time"
 
 	"github.com/spf13/cobra"
 	"k8s.io/klog/v2"
@@ -14,8 +16,13 @@ var syncCmd = &cobra.Command{
 	Run:   doSync,
 }
 
+var (
+	tariff string
+)
+
 func init() {
 	rootCmd.AddCommand(syncCmd)
+	syncCmd.Flags().StringVar(&tariff, "tariff", "", "If set, specifies a tariff code to sync. Use the products command to list product codes.")
 }
 
 func doSync(command *cobra.Command, args []string) {
@@ -26,6 +33,15 @@ func doSync(command *cobra.Command, args []string) {
 			klog.Warningf("close: %v", err)
 		}
 	}()
+
+	if tariff != "" {
+		// TODO: fixme
+		klog.Infof("Syncing tariff %s", tariff)
+		if err := o.SyncTariff(ctx, tariff, fmt.Sprintf("E-1R-%s-J", tariff), time.Time{}, time.Now()); err != nil {
+			klog.Exitf("SyncTariff(%s): %v", tariff, err)
+		}
+		return
+	}
 
 	if err := o.Sync(ctx); err != nil {
 		klog.Exitf("Sync: %v", err)
