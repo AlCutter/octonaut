@@ -20,7 +20,7 @@ func init() {
 
 func doSync(command *cobra.Command, args []string) {
 	ctx := context.Background()
-	c, o := MustNewFromFlags(ctx)
+	o, c := MustNewFromFlags(ctx)
 	defer func() {
 		if err := c(); err != nil {
 			klog.Warningf("close: %v", err)

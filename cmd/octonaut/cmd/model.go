@@ -27,7 +27,7 @@ func init() {
 
 func doModel(command *cobra.Command, args []string) {
 	ctx := context.Background()
-	c, o := MustNewFromFlags(ctx)
+	o, c := MustNewFromFlags(ctx)
 	defer func() {
 		if err := c(); err != nil {
 			klog.Warningf("close: %v", err)
@@ -122,7 +122,7 @@ func runModel(ctx context.Context, cons *octonaut.Consumption, rates *octopus.Ta
 	standing := 54.83 * days
 	klog.Infof("Standing  : £%.2f (inc. VAT) (%.1f days)", standing/100.0, days)
 	totalCost := (cost.TotalCost + standing)
-	klog.Infof("Total Cost: £%.2f", totalCost/100.0)
+	klog.Infof("Total Cost: £%.2f (£%.2f/day, effective £%.2f/kWh)", totalCost/100.0, (totalCost/100.0)/days, (totalCost / 100.0))
 
 	return cost
 }

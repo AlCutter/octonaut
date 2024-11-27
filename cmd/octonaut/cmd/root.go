@@ -40,7 +40,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&DBPath, "db", "./octonaut.sqlite3", "SQLite3 DB path and filename.")
 }
 
-func MustNewFromFlags(ctx context.Context) (func() error, *octonaut.Octonaut) {
+func MustNewFromFlags(ctx context.Context) (*octonaut.Octonaut, func() error) {
 	db, err := sql.Open("sqlite3", DBPath)
 	if err != nil {
 		klog.Exitf("Failed to open DB (%q): %v", DBPath, err)
@@ -56,5 +56,5 @@ func MustNewFromFlags(ctx context.Context) (func() error, *octonaut.Octonaut) {
 		klog.Exitf("New: %v", err)
 	}
 
-	return db.Close, r
+	return r, db.Close
 }
