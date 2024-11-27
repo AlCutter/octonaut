@@ -2,8 +2,6 @@ package octonaut
 
 import (
 	"time"
-
-	"k8s.io/klog/v2"
 )
 
 type TransferFunc func(ConsumptionInterval) ConsumptionInterval
@@ -17,12 +15,38 @@ func Apply(tf TransferFunc, c Consumption) Consumption {
 	return r
 }
 
-func LoadShift(capacity float64, chargeRate float64, serviceLimit float64, startHour, endHour int) TransferFunc {
+type LoadShiftStats struct {
+	Intervals []LoadShiftIntervalStats
+}
+
+func (l *LoadShiftStats) Headers() []string {
+	return []string{"BatteryCharge", "BatteryDelta", "BatteryFull"}
+}
+
+func (l *LoadShiftStats) NumIntervals() int {
+	return len(l.Intervals)
+}
+
+func (l *LoadShiftStats) Interval(i int) []any {
+	d := l.Intervals[i]
+	return []any{d.BatteryCharge, d.BatteryDelta, d.BatteryFull}
+}
+
+type LoadShiftIntervalStats struct {
+	BatteryCharge float64
+	BatteryDelta  float64
+	BatteryFull   bool
+}
+
+func LoadShift(capacity float64, chargeRate float64, serviceLimit float64, startHour, endHour int) (TransferFunc, *LoadShiftStats) {
 	charge := float64(0)
-	return func(c ConsumptionInterval) ConsumptionInterval {
+	stats := &LoadShiftStats{}
+
+	tf := func(c ConsumptionInterval) ConsumptionInterval {
 		hours := float64(c.End.Sub(c.Start)) / float64(time.Hour)
 		inShift := c.Start.Hour() >= startHour && c.Start.Hour() <= endHour
 		r := c
+		batteryDelta := float64(0)
 		if inShift {
 			if charge < capacity {
 				amt := chargeRate * hours
@@ -30,23 +54,24 @@ func LoadShift(capacity float64, chargeRate float64, serviceLimit float64, start
 				if amt > space {
 					amt = space
 				}
-				charge += amt
-				r := c
-				r.Consumption += amt
-				klog.Infof("%v charge %.2f kWh [%-.2f]", c.Start.Format(time.Stamp), charge, amt)
-				return r
+				batteryDelta = amt
 			}
-			klog.Infof("%v charge %.2f kWh [full]", c.Start.Format(time.Stamp), charge)
-			return r
+		} else {
+			fromBattery := charge
+			if charge > r.Consumption {
+				fromBattery = r.Consumption
+			}
+			batteryDelta = -fromBattery
 		}
-		fromBattery := charge
-		if charge > r.Consumption {
-			fromBattery = r.Consumption
-		}
-		charge -= fromBattery
-		r.Consumption -= fromBattery
-		klog.Infof("%v charge %.2f kWh [%-.2f]", c.Start.Format(time.Stamp), charge, -fromBattery)
+		charge += batteryDelta
+		r.Consumption += batteryDelta
+		stats.Intervals = append(stats.Intervals, LoadShiftIntervalStats{
+			BatteryDelta:  batteryDelta,
+			BatteryCharge: charge,
+			BatteryFull:   charge == capacity,
+		})
 
 		return r
 	}
+	return tf, stats
 }
