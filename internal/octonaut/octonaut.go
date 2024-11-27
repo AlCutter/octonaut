@@ -285,7 +285,7 @@ func (o *Octonaut) TariffRates(ctx context.Context, tariffCode string, from, to 
 	return &r, nil
 }
 
-func (o *Octonaut) Consumption(ctx context.Context, mpan, meter string, from time.Time, to time.Time) (*Consumption, error) {
+func (o *Octonaut) Consumption(ctx context.Context, mpan, meter string, from time.Time, to time.Time) (Consumption, error) {
 	r := Consumption{}
 	q := `
 		SELECT IntervalStart, IntervalEnd, kWh FROM Consumption WHERE Account = $account AND MPAN = $mpan AND Meter = $meter AND IntervalStart <= $from AND IntervalEnd > $from
@@ -300,7 +300,7 @@ func (o *Octonaut) Consumption(ctx context.Context, mpan, meter string, from tim
 		sql.Named("to", to.Unix())}
 	rows, err := o.db.QueryContext(ctx, q, args...)
 	if err != nil {
-		return nil, fmt.Errorf("QueryContext: %v", err)
+		return r, fmt.Errorf("QueryContext: %v", err)
 	}
 	var last *time.Time
 	for rows.Next() {
@@ -308,7 +308,7 @@ func (o *Octonaut) Consumption(ctx context.Context, mpan, meter string, from tim
 		var end sql.NullTime
 		var k float64
 		if err := rows.Scan(&start, &end, &k); err != nil {
-			return nil, fmt.Errorf("Scan: %v", err)
+			return r, fmt.Errorf("Scan: %v", err)
 		}
 		if last != nil && !last.Equal(start) {
 			klog.Warningf("Missing data between %v and %v, inserting zero usage intervals", last, start)
@@ -330,8 +330,8 @@ func (o *Octonaut) Consumption(ctx context.Context, mpan, meter string, from tim
 		last = &(end.Time)
 	}
 	if len(r.Intervals) == 0 {
-		return nil, errors.New("no data")
+		return r, errors.New("no data")
 	}
 	klog.Infof("%d ConsumptionIntervals", len(r.Intervals))
-	return &r, nil
+	return r, nil
 }

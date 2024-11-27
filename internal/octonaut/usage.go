@@ -107,7 +107,7 @@ type ConsumptionIntervalCost struct {
 	Cost float64
 }
 
-func TotalCost(ctx context.Context, cons *Consumption, c RateFn) (*Cost, error) {
+func TotalCost(ctx context.Context, cons Consumption, c RateFn) (*Cost, error) {
 	r := Cost{}
 	for _, u := range cons.Intervals {
 		rate, err := c(ctx, u.Start, u.End)

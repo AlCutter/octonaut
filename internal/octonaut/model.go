@@ -38,16 +38,15 @@ type LoadShiftIntervalStats struct {
 	BatteryFull   bool
 }
 
-func LoadShift(capacity float64, chargeRate float64, serviceLimit float64, startHour, endHour int) (TransferFunc, *LoadShiftStats) {
+func LoadShift(capacity float64, chargeRate float64, serviceLimit float64, mayCharge func(t time.Time) bool) (TransferFunc, *LoadShiftStats) {
 	charge := float64(0)
 	stats := &LoadShiftStats{}
 
 	tf := func(c ConsumptionInterval) ConsumptionInterval {
 		hours := float64(c.End.Sub(c.Start)) / float64(time.Hour)
-		inShift := c.Start.Hour() >= startHour && c.Start.Hour() <= endHour
 		r := c
 		batteryDelta := float64(0)
-		if inShift {
+		if mayCharge(c.Start) {
 			if charge < capacity {
 				amt := chargeRate * hours
 				space := capacity - charge

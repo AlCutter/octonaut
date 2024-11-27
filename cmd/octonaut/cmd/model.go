@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/AlCutter/octonaut/internal/octonaut"
@@ -21,8 +23,29 @@ var modelCmd = &cobra.Command{
 	Run:   doModel,
 }
 
+var (
+	batteryCap    float64
+	batteryRate   float64
+	batteryCharge string
+
+	fromStr string
+	toStr   string
+)
+
 func init() {
 	rootCmd.AddCommand(modelCmd)
+
+	modelCmd.Flags().StringVar(&tariff, "tariff", "", "Tariff code to use for modelling.")
+	modelCmd.Flags().Float64Var(&batteryCap, "battery_capacity", 0, "Battery capacity in kWh for modelling load shifting.")
+	modelCmd.Flags().Float64Var(&batteryRate, "battery_rate", 0, "Battery max charge/discharge rate in kWh for modelling load shifting.")
+	modelCmd.Flags().StringVar(&batteryCharge, "battery_charge", "", "Battery charge stratech for load shifting. Valid options: <hour>-<hour> (e.g. '0-5' to charge between midnight and 5am).")
+
+	modelCmd.Flags().StringVar(&fromStr, "from", "", "Date from which to start modelling (YYYY-MM-DD).")
+	modelCmd.Flags().StringVar(&toStr, "to", "", "Date to model to, or leave until to model until today (YYYY-MM-DD).")
+
+	modelCmd.MarkFlagsRequiredTogether("battery_capacity", "battery_rate", "battery_charge")
+	modelCmd.MarkFlagRequired("from")
+	modelCmd.MarkFlagRequired("tariff")
 }
 
 func doModel(command *cobra.Command, args []string) {
@@ -42,18 +65,22 @@ func doModel(command *cobra.Command, args []string) {
 	ps := a.Properties[0]
 	em := ps.ElectricityMeterPoints[0]
 
-	//	now := time.Now().Add(-24 * time.Hour * 3).Truncate(30 * time.Minute)
-	//	end := now.Add(8 * time.Hour)
-	now := time.Now().Truncate(24 * time.Hour).UTC()
-	//start := time.Date(now.Year(), time.March, 19, 0, 0, 0, 0, time.Local)
-	start := time.Date(now.Year(), time.January, 1, 0, 0, 0, 0, time.Local)
-	//start := time.Date(now.Year(), time.October, 1, 0, 0, 0, 0, time.Local)
-	end := time.Date(now.Year(), time.October, 31, 23, 59, 59, 0, time.Local)
-	//end := now.Add(-24 * time.Hour * 3)
-	klog.Infof("Start: %v", start)
-	klog.Infof("End: %v", end)
-	//end := now.Add(15 * time.Minute)
-	cons, err := o.Consumption(ctx, em.MPAN, em.Meters[0].SerialNumber, start, end)
+	from, err := time.Parse(time.DateOnly, fromStr)
+	if err != nil {
+		klog.Exitf("Invalid from date: %v", err)
+	}
+	to := time.Now().Truncate(24 * time.Hour)
+	if toStr != "" {
+		to, err = time.Parse(time.DateOnly, toStr)
+		if err != nil {
+			klog.Exitf("Invalid to date: %v", err)
+		}
+	}
+	klog.Infof("From: %v", from)
+	klog.Infof("To: %v", to)
+
+	// TODO
+	cons, err := o.Consumption(ctx, em.MPAN, em.Meters[0].SerialNumber, from, to)
 	if err != nil {
 		klog.Exitf("Consumption: %v", err)
 	}
@@ -64,53 +91,35 @@ func doModel(command *cobra.Command, args []string) {
 		intelligentGo = "INTELLI-VAR-22-10-14"
 	)
 
-	if err := o.SyncTariff(ctx, agile24, fmt.Sprintf("E-1R-%s-J", agile24), start, end); err != nil {
-		klog.Exitf("SyncTariff (%s): %v", agile24, err)
+	// TODO: postcode zones
+	tariffCode := fmt.Sprintf("E-1R-%s-J", tariff)
+	if err := o.SyncTariff(ctx, tariff, tariffCode, from, to); err != nil {
+		klog.Exitf("SyncTariff (%s): %v", tariff, err)
 	}
-	if err := o.SyncTariff(ctx, agile23, fmt.Sprintf("E-1R-%s-J", agile23), start, end); err != nil {
-		klog.Exitf("SyncTariff (%s): %v", agile23, err)
-	}
-	if err := o.SyncTariff(ctx, "INTELLI-VAR-22-10-14", "E-1R-INTELLI-VAR-22-10-14-J", start, end); err != nil {
-		klog.Exitf("SyncTariff (intelli): %v", err)
-	}
-
-	agileRates, err := o.TariffRates(ctx, fmt.Sprintf("E-1R-%s-J", agile23), start, end)
+	rates, err := o.TariffRates(ctx, tariffCode, from, to)
 	if err != nil {
-		klog.Exitf("Tariff (%s): %v", agile23, err)
+		klog.Exitf("TariffRates: %v", err)
 	}
 
-	intelliRates, err := o.TariffRates(ctx, "E-1R-INTELLI-VAR-22-10-14-J", start, end)
-	if err != nil {
-		klog.Exitf("Tariff (intelli): %v", err)
+	if batteryCharge != "" {
+		cs, err := chargeStrategy(batteryCharge)
+		if err != nil {
+			klog.Exitf("Invalid battery charge strategy: %v", err)
+		}
+		loadShift, _ := octonaut.LoadShift(batteryCap, batteryRate, 0, cs)
+		cons = octonaut.Apply(loadShift, cons)
 	}
 
-	//cost, err := octonaut.TotalCost(ctx, cons, octonaut.FlatRate(0.25))
-	loadShift, shiftStats := octonaut.LoadShift(60, 10, 60, 0, 5)
-	shiftedCons := octonaut.Apply(loadShift, *cons)
-
-	klog.Infof("Unmodified=============")
-	origCost := runModel(ctx, cons, agileRates)
-	if err := writeCSV("orig.csv", origCost); err != nil {
-		klog.Exitf("writeCSV: %v", err)
-	}
-
-	klog.Infof("Load shifted (%s)===========", agile23)
-	shiftedAgileCost := runModel(ctx, &shiftedCons, agileRates)
-	klog.Infof("Saving shifted Agile: £%.2f", (origCost.TotalCost-shiftedAgileCost.TotalCost)/100.0)
-	if err := writeCSV("agile_shifted.csv", shiftedAgileCost, shiftStats); err != nil {
-		klog.Exitf("writeCSV: %v", err)
-	}
-
-	klog.Infof("Load shifted (intelli)===========")
-	shiftedIntelliCost := runModel(ctx, &shiftedCons, intelliRates)
-	klog.Infof("Saving shifted Intelligent Go: £%.2f", (origCost.TotalCost-shiftedIntelliCost.TotalCost)/100.0)
-	if err := writeCSV("intelligentgo_shifted.csv", shiftedIntelliCost, shiftStats); err != nil {
-		klog.Exitf("writeCSV: %v", err)
-	}
+	_ = runModel(ctx, cons, rates)
+	/*
+		if err := writeCSV("orig.csv", origCost); err != nil {
+			klog.Exitf("writeCSV: %v", err)
+		}
+	*/
 
 }
 
-func runModel(ctx context.Context, cons *octonaut.Consumption, rates *octopus.TariffRate) *octonaut.Cost {
+func runModel(ctx context.Context, cons octonaut.Consumption, rates *octopus.TariffRate) *octonaut.Cost {
 	start := cons.Intervals[0].Start
 	end := cons.Intervals[len(cons.Intervals)-1].End
 	cost, err := octonaut.TotalCost(ctx, cons, octonaut.Tariff(*rates))
@@ -141,5 +150,40 @@ func writeCSV(name string, c *octonaut.Cost, s ...octonaut.IntervalStat) error {
 		return fmt.Errorf("ToCSV: %v", err)
 	}
 	return nil
+}
 
+func chargeStrategy(s string) (func(t time.Time) bool, error) {
+	bits := strings.Split(s, "-")
+	if len(bits) != 2 {
+		return nil, fmt.Errorf("invalid strategy format, must be <N>-<M>")
+	}
+	n, err := parseHour(bits[0])
+	if err != nil {
+		return nil, fmt.Errorf("interval start: %v", err)
+	}
+	m, err := parseHour(bits[1])
+	if err != nil {
+		return nil, fmt.Errorf("interval end: %v", err)
+	}
+	return func(t time.Time) bool {
+		h := float64(t.Hour()) + float64(t.Minute())/60.0
+		if n <= m {
+			// range is within a single day, e.g. 5-10
+			return h >= n && h < m
+		} else {
+			// range crosses midnight boundary, e.g. 23-4
+			return h >= n || h < m
+		}
+	}, nil
+}
+
+func parseHour(s string) (float64, error) {
+	i, err := strconv.ParseFloat(s, 5)
+	if err != nil {
+		return 0, err
+	}
+	if i < 0 || i >= 24 {
+		return 0, fmt.Errorf("%f should be 0 <= N < 24", i)
+	}
+	return i, nil
 }
