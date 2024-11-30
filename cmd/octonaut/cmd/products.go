@@ -3,8 +3,8 @@ package cmd
 import (
 	"context"
 
+	"github.com/charmbracelet/log"
 	"github.com/spf13/cobra"
-	"k8s.io/klog/v2"
 )
 
 // productsCmd represents the products command
@@ -23,17 +23,17 @@ func doProducts(cmd *cobra.Command, args []string) {
 	o, c := MustNewFromFlags(ctx)
 	defer func() {
 		if err := c(); err != nil {
-			klog.Warningf("close: %v", err)
+			log.Warnf("close: %v", err)
 		}
 	}()
 
 	ps, err := o.Products(ctx, nil)
 	if err != nil {
-		klog.Exitf("Products: %v", err)
+		log.Fatalf("Products: %v", err)
 	}
 	for _, p := range ps.Results {
-		klog.Infof("%s:", p.Code)
-		klog.Infof("  %s:", p.Description)
+		log.Infof("%s:", p.Code)
+		log.Infof("  %s", p.Description)
 	}
 
 }

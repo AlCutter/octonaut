@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/charmbracelet/log"
 	"github.com/spf13/cobra"
-	"k8s.io/klog/v2"
 )
 
 // syncCmd represents the sync command
@@ -30,24 +30,24 @@ func doSync(command *cobra.Command, args []string) {
 	o, c := MustNewFromFlags(ctx)
 	defer func() {
 		if err := c(); err != nil {
-			klog.Warningf("close: %v", err)
+			log.Warnf("close: %v", err)
 		}
 	}()
 
 	if tariff != "" {
 		// TODO: fixme
-		klog.Infof("Syncing tariff %s", tariff)
+		log.Infof("Syncing tariff %s", tariff)
 		if err := o.SyncTariff(ctx, tariff, fmt.Sprintf("E-1R-%s-J", tariff), time.Time{}, time.Now()); err != nil {
-			klog.Exitf("SyncTariff(%s): %v", tariff, err)
+			log.Fatalf("SyncTariff(%s): %v", tariff, err)
 		}
 		return
 	}
 
 	if err := o.Sync(ctx); err != nil {
-		klog.Exitf("Sync: %v", err)
+		log.Fatalf("Sync: %v", err)
 	}
 	_, _, err := o.Account(ctx)
 	if err != nil {
-		klog.Exitf("Account: %v", err)
+		log.Fatalf("Account: %v", err)
 	}
 }

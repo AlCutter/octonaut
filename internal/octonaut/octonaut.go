@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/AlCutter/octonaut/internal/octopus"
-	"k8s.io/klog/v2"
+	"github.com/charmbracelet/log"
 )
 
 type Octonaut struct {
@@ -83,7 +83,7 @@ func initDB(ctx context.Context, db *sql.DB) error {
 }
 
 func (o Octonaut) Sync(ctx context.Context) error {
-	klog.Infof("Syncing %s", o.c.AccountID)
+	log.Infof("Syncing %s", o.c.AccountID)
 	a, err := o.c.Account(ctx)
 	if err != nil {
 		return err
@@ -94,22 +94,22 @@ func (o Octonaut) Sync(ctx context.Context) error {
 	o.account = &a
 
 	for _, p := range a.Properties {
-		klog.Infof(" + Syncing property %d", p.ID)
+		log.Infof(" + Syncing property %d", p.ID)
 		for _, em := range p.ElectricityMeterPoints {
-			klog.Infof(" | + Syncing MPAN %s", em.MPAN)
+			log.Infof(" | + Syncing MPAN %s", em.MPAN)
 			for _, m := range em.Meters {
 				if m.SerialNumber != "" {
-					klog.Infof(" | | + Syncing Meter %s", m.SerialNumber)
+					log.Infof(" | | + Syncing Meter %s", m.SerialNumber)
 					lastReading, err := o.consumptionMostRecent(ctx, em.MPAN, m.SerialNumber)
 					if err != nil {
-						klog.Warningf("Error reading local consumption date: %v", err)
+						log.Warnf("Error reading local consumption date: %v", err)
 						lastReading = p.MovedInAt
 					}
-					klog.Infof(" | | | + Syncing Consumption since %v", lastReading)
+					log.Infof(" | | | + Syncing Consumption since %v", lastReading)
 					c, err := o.c.Consumption(ctx, em.MPAN, m.SerialNumber, lastReading, time.Now())
-					klog.Infof(" | | | | Got %d records", len(c.Results))
+					log.Infof(" | | | | Got %d records", len(c.Results))
 					if err := o.insertConsumption(ctx, em.MPAN, m.SerialNumber, c); err != nil {
-						klog.Warningf("Failed to store consumption data: %v", err)
+						log.Warnf("Failed to store consumption data: %v", err)
 					}
 				}
 			}
@@ -281,7 +281,7 @@ func (o *Octonaut) TariffRates(ctx context.Context, tariffCode string, from, to 
 	if len(r.Results) == 0 {
 		return nil, errors.New("no data")
 	}
-	klog.Infof("%d TariffRates", len(r.Results))
+	log.Infof("%d TariffRates", len(r.Results))
 	return &r, nil
 }
 
@@ -311,7 +311,7 @@ func (o *Octonaut) Consumption(ctx context.Context, mpan, meter string, from tim
 			return r, fmt.Errorf("Scan: %v", err)
 		}
 		if last != nil && !last.Equal(start) {
-			klog.Warningf("Missing data between %v and %v, inserting zero usage intervals", last, start)
+			log.Warnf("Missing data between %v and %v, inserting zero usage intervals", last, start)
 			for last.Before(start) {
 				e := last.Add(30 * time.Minute)
 				r.Intervals = append(r.Intervals, ConsumptionInterval{
@@ -332,6 +332,6 @@ func (o *Octonaut) Consumption(ctx context.Context, mpan, meter string, from tim
 	if len(r.Intervals) == 0 {
 		return r, errors.New("no data")
 	}
-	klog.Infof("%d ConsumptionIntervals", len(r.Intervals))
+	log.Infof("%d ConsumptionIntervals", len(r.Intervals))
 	return r, nil
 }

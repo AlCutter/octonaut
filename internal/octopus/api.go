@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"k8s.io/klog/v2"
+	"github.com/charmbracelet/log"
 )
 
 func accountPath(a string) string { return fmt.Sprintf("v1/accounts/%s/", a) }
@@ -230,7 +230,7 @@ func (p Products) FindByTariff(t string) *Product {
 }
 
 func (c *Client) get(ctx context.Context, p string, out any) error {
-	klog.V(2).Infof("GET %v", p)
+	log.Debugf("GET %v", p)
 	req, err := http.NewRequestWithContext(ctx, "GET", c.EndPoint+p, nil)
 	if err != nil {
 		return fmt.Errorf("NewRequestWithContext: %v", err)

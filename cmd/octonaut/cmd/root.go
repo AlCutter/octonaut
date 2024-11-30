@@ -3,12 +3,11 @@ package cmd
 import (
 	"context"
 	"database/sql"
-	"os"
 	"strings"
 
 	"github.com/AlCutter/octonaut/internal/octonaut"
+	"github.com/charmbracelet/log"
 	"github.com/spf13/cobra"
-	"k8s.io/klog/v2"
 )
 
 // rootCmd represents the base command when called without any subcommands
@@ -29,7 +28,7 @@ var (
 func Execute() {
 	err := rootCmd.Execute()
 	if err != nil {
-		os.Exit(1)
+		log.Fatal("Execute: %v", err)
 	}
 }
 
@@ -43,7 +42,7 @@ func init() {
 func MustNewFromFlags(ctx context.Context) (*octonaut.Octonaut, func() error) {
 	db, err := sql.Open("sqlite3", DBPath)
 	if err != nil {
-		klog.Exitf("Failed to open DB (%q): %v", DBPath, err)
+		log.Fatalf("Failed to open DB (%q): %v", DBPath, err)
 	}
 
 	u := EndPoint
@@ -53,7 +52,7 @@ func MustNewFromFlags(ctx context.Context) (*octonaut.Octonaut, func() error) {
 
 	r, err := octonaut.New(ctx, Account, Key, u, db)
 	if err != nil {
-		klog.Exitf("New: %v", err)
+		log.Fatalf("New: %v", err)
 	}
 
 	return r, db.Close
