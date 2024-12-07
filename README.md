@@ -24,9 +24,11 @@ Octonaut has 3 commands:
 
 `products`: This lists all the Octopus electricity tariffs.
 
-`model`: This command does cost calculations based on your historical consumption for different hypothetical tariff and battery configurations.
+`model`: This command does cost calculations based on your historical consumption for different hypothetical tariff and battery configurations, optionally writing out the detailed stats to a `.csv` file for further analysis or graphing.
 
 ### Examples
+
+#### Sync
 
 First let Octonaut sync your consumption data locally (by default it'll store this in a file called `octonaut.sqlite3` in the current directory):
 
@@ -40,22 +42,9 @@ $ go run github.com/AlCutter/octonaut/cmd/octonaut --account=A-1111ABCD2D --key=
 8:44PM INFO  | | | | Got 12345 records
 ```
 
-Now that Octonaut has your consumption data locally, it can answer questions about it for you, for example: How much would I have paid if I were on the Agile tariff?
+#### View tariff products 
 
-```bash
-$ go run github.com/AlCutter/octonaut/cmd/octonaut --account=A-1111ABCD2D --key=sk_live_... model --from=2024-01-01 --tariff=AGILE-23-12-06
-8:53PM INFO From: 2024-01-01 00:00:00 +0000 UTC
-8:53PM INFO To: 2024-12-01 00:00:00 +0000 GMT
-8:53PM WARN Missing data between 2024-06-07 09:30:00 +0000 UTC and 2024-06-07 12:30:00 +0000 UTC, inserting zero usage intervals
-8:53PM WARN Missing data between 2024-08-05 21:30:00 +0000 UTC and 2024-08-06 13:30:00 +0000 UTC, inserting zero usage intervals
-8:53PM INFO 16080 ConsumptionIntervals
-8:53PM INFO 16080 TariffRates
-8:53PM INFO Energy    : £1234.56 (inc. VAT) (12345.67 kWh)
-8:53PM INFO Standing  : £123.45 (inc. VAT) (335.0 days)
-8:53PM INFO Total Cost: £2345.67 (£12.34/day, effective £0.12/kWh)
-```
-
-You can look at other currently available tariff codes using the `products` command:
+You can look at currently available tariff codes using the `products` command. This is useful for discovering the correct codes to pass to the `model` command:
 
 ```bash
 $ go run ./cmd/octonaut --account=A-1111ABCD2D --key=sk_live_... products
@@ -72,8 +61,30 @@ $ go run ./cmd/octonaut --account=A-1111ABCD2D --key=sk_live_... products
 ...
 ```
 
+#### Model historical usage with different tariff
+
+Now that Octonaut has your consumption data locally, it can answer questions about it for you, for example: How much would I have paid if I were on the `AGILE-23-12-06` tariff?
+
+```bash
+$ go run github.com/AlCutter/octonaut/cmd/octonaut --account=A-1111ABCD2D --key=sk_live_... model --from=2024-01-01 --tariff=AGILE-23-12-06
+8:53PM INFO From: 2024-01-01 00:00:00 +0000 UTC
+8:53PM INFO To: 2024-12-01 00:00:00 +0000 GMT
+8:53PM WARN Missing data between 2024-06-07 09:30:00 +0000 UTC and 2024-06-07 12:30:00 +0000 UTC, inserting zero usage intervals
+8:53PM WARN Missing data between 2024-08-05 21:30:00 +0000 UTC and 2024-08-06 13:30:00 +0000 UTC, inserting zero usage intervals
+8:53PM INFO 16080 ConsumptionIntervals
+8:53PM INFO 16080 TariffRates
+8:53PM INFO Energy    : £1234.56 (inc. VAT) (12345.67 kWh)
+8:53PM INFO Standing  : £123.45 (inc. VAT) (335.0 days)
+8:53PM INFO Total Cost: £2345.67 (£12.34/day, effective £0.12/kWh)
+```
+
+
+#### Model costs when using a battery for load shifting
+
 You can also ask octonaut to calculate what your bill might have looked like if you had a residential battery installed in order to to _load shift_ your consumption.
-You'll need to tell it what capacity of battery in kWh, how quickly it can charge in kW, and between which times it should charge:
+You'll need to tell it what capacity of battery in kWh, how quickly it can charge in kW, and between which times it should charge.
+
+Here, we're modeling using a 40kWh battery with a 10kW charge rate, on the Go variable tariff which offers lower unit prices between 23:30 and 4:30:
 
 ```bash
 $ go run ./cmd/octonaut --account=A-11111ABCD2D --key=sk_live_.... model --from=2024-01-01 --tariff=GO-VAR-22-10-14 --battery_capacity=40 --battery_rate=10 --battery_charge="23.5-4.5"
