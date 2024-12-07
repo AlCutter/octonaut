@@ -1,5 +1,7 @@
 # Octonaut
 
+<img src="/images/octonaut.png" align="right" width="384" height="384">
+
 Octonaut is a tool for modeling electricity usage and costs for Octopus Energy customers.
 
 This tool uses the Octopus Energy API to fetch your electricity consumption data and can use it calculate what your historical usage would have cost you under different Octoput tariffs.
