@@ -253,3 +253,18 @@ func (c *Client) get(ctx context.Context, p string, out any) error {
 	}
 	return nil
 }
+
+// ParseTariffCode splits a tariff code from an agreement into its cnstituent parts:
+// <Fuel>-<Registers>-<Product code>-<Postcode area>
+func ParseTariffCode(tc string) (string, string, string, string, error) {
+	bits := strings.Split(tc, "-")
+	l := len(bits)
+	if l < 4 {
+		return "", "", "", "", fmt.Errorf("invalid tariff code %q", l)
+	}
+	return bits[0], bits[1], strings.Join(bits[2:l-1], "-"), bits[l-1], nil
+}
+
+func BuildTariffCode(fuel, registers, product, area string) string {
+	return strings.Join([]string{fuel, registers, product, area}, "-")
+}

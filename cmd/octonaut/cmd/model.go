@@ -91,8 +91,14 @@ func doModel(command *cobra.Command, args []string) {
 		intelligentGo = "INTELLI-VAR-22-10-14"
 	)
 
-	// TODO: postcode zones
-	tariffCode := fmt.Sprintf("E-1R-%s-J", tariff)
+	agreement := em.ActiveAgreement(time.Now())
+	f, r, _, pc, err := octopus.ParseTariffCode(agreement.TariffCode)
+	if err != nil {
+		log.Fatalf("Failed to parse existing tariff code: %v", err)
+	}
+
+	tariffCode := octopus.BuildTariffCode(f, r, tariff, pc)
+	log.Infof("Using TariffCode %q", tariffCode)
 	if err := o.SyncTariff(ctx, tariff, tariffCode, from, to); err != nil {
 		log.Fatalf("SyncTariff (%s): %v", tariff, err)
 	}
