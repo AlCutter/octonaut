@@ -94,7 +94,7 @@ Add a `--write_csv=filename.csv` to the command if you'd like to have `octonaut`
 
 ## Caveats
 
-This software is work-in-progress, and apart from any unintended bugs and errors, also contains some known limitations. E.g. it currently assumes you like in the `J` post-code area.
+This software is work-in-progress, and almost certainly contains bugs, errors, and missing functionality you'd like to have.
 
 Pull requests, issues, etc. all very welcome!
 
