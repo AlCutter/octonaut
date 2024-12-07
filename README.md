@@ -79,6 +79,8 @@ You'll need to tell it what capacity of battery in kWh, how quickly it can charg
 $ go run ./cmd/octonaut --account=A-11111ABCD2D --key=sk_live_.... model --from=2024-01-01 --tariff=GO-VAR-22-10-14 --battery_capacity=40 --battery_rate=10 --battery_charge="23.5-4.5"
 ```
 
+Add a `--write_csv=filename.csv` to the command if you'd like to have `octonaut` write out a CSV file with detailed half-hourly breakdowns of consumption, battery level, charge/discharge rate, etc.
+
 ## Caveats
 
 This software is work-in-progress, and apart from any unintended bugs and errors, also contains some known limitations. E.g. it currently assumes you like in the `J` post-code area.

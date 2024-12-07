@@ -30,6 +30,8 @@ var (
 
 	fromStr string
 	toStr   string
+
+	csvFile string
 )
 
 func init() {
@@ -42,6 +44,8 @@ func init() {
 
 	modelCmd.Flags().StringVar(&fromStr, "from", "", "Date from which to start modelling (YYYY-MM-DD).")
 	modelCmd.Flags().StringVar(&toStr, "to", "", "Date to model to, or leave until to model until today (YYYY-MM-DD).")
+
+	modelCmd.Flags().StringVar(&csvFile, "write_csv", "", "If set, write a csv containing the modeled data to the named file.")
 
 	modelCmd.MarkFlagsRequiredTogether("battery_capacity", "battery_rate", "battery_charge")
 	modelCmd.MarkFlagRequired("from")
@@ -107,22 +111,23 @@ func doModel(command *cobra.Command, args []string) {
 		log.Fatalf("TariffRates: %v", err)
 	}
 
+	stats := []octonaut.IntervalStat{}
 	if batteryCharge != "" {
 		cs, err := chargeStrategy(batteryCharge)
 		if err != nil {
 			log.Fatalf("Invalid battery charge strategy: %v", err)
 		}
-		loadShift, _ := octonaut.LoadShift(batteryCap, batteryRate, 0, cs)
+		loadShift, loadShiftStats := octonaut.LoadShift(batteryCap, batteryRate, 0, cs)
 		cons = octonaut.Apply(loadShift, cons)
+		stats = append(stats, loadShiftStats)
 	}
 
-	_ = runModel(ctx, cons, rates)
-	/*
-		if err := writeCSV("orig.csv", origCost); err != nil {
-			log.Fatalf("writeCSV: %v", err)
+	cost := runModel(ctx, cons, rates)
+	if csvFile != "" {
+		if err := writeCSV(csvFile, cost, stats...); err != nil {
+			log.Fatalf("Failed to write csv to %q: %v", csvFile, err)
 		}
-	*/
-
+	}
 }
 
 func runModel(ctx context.Context, cons octonaut.Consumption, rates *octopus.TariffRate) *octonaut.Cost {
